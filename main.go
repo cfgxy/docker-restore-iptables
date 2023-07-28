@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/docker/distribution/context"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/network"
@@ -136,7 +137,8 @@ func (r *DrvRegistry) RegisterDriver(name string, driver driverapi.Driver, capab
 		cfg := make(map[string]interface{})
 		cfg[netlabel.GenericData] = data
 
-		driver.CreateNetwork(
+		fmt.Println("Restoring network", ne.Name, "with subnet", subnet, "and interface", bridgeName)
+		err := driver.CreateNetwork(
 			ne.ID,
 			cfg,
 			&networkInfo{},
@@ -148,6 +150,9 @@ func (r *DrvRegistry) RegisterDriver(name string, driver driverapi.Driver, capab
 			},
 			[]driverapi.IPAMData{},
 		)
+		if err != nil {
+			logrus.Error(err)
+		}
 	}
 
 	ArrangeUserFilterRule()
@@ -160,8 +165,26 @@ func (r *DrvRegistry) RegisterDriver(name string, driver driverapi.Driver, capab
 				},
 			}
 
-			cli.NetworkDisconnect(ctx, ne.ID, containerId, true)
-			cli.NetworkConnect(ctx, ne.ID, containerId, cfg)
+			if ne.Name == "bridge" {
+				cfg.IPAMConfig = &network.EndpointIPAMConfig{}
+			}
+
+			fmt.Println("Restoring container", con.Name, "with IP", con.IPv4Address, "in network", ne.Name)
+			err := cli.NetworkDisconnect(ctx, ne.ID, containerId, true)
+			if err == nil {
+				err2 := cli.NetworkConnect(ctx, ne.ID, containerId, cfg)
+				if err2 != nil {
+					fmt.Println("Retry connect container", con.Name, "with dynamic IP in network", ne.Name)
+					logrus.Error(err2)
+					cfg.IPAMConfig = &network.EndpointIPAMConfig{}
+					err3 := cli.NetworkConnect(ctx, ne.ID, containerId, cfg)
+					if err3 != nil {
+						logrus.Error(err3)
+					}
+				}
+			} else {
+				logrus.Error(err)
+			}
 		}
 	}
 	return nil
